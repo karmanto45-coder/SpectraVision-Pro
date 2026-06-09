@@ -220,10 +220,3 @@ def render_login():
                     else:
                         st.error("Invalid username or password." if is_en else
                                  "Username atau kata sandi salah.")
-
-            st.markdown("""
-            <div style='text-align:center;margin-top:1rem;font-size:0.75rem;color:#475569;'>
-            Default: admin / admin123<br>
-            Ganti password setelah login pertama
-            </div>
-            """, unsafe_allow_html=True)
