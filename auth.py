@@ -122,7 +122,7 @@ def render_login():
     <div class="login-outer">
       <div class="login-card">
         <div class="logo-icon">🔬</div>
-        <p class="login-logo">SpectraID Pro</p>
+        <p class="login-logo">SpectraVision Pro</p>
         <p class="login-sub">MULTIVARIATE CURVE RESOLUTION &nbsp;·&nbsp; SPECTRAL IDENTIFICATION</p>
         <span class="login-version">v2.0 &nbsp;·&nbsp; Professional Edition</span>
       </div>
