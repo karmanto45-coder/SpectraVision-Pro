@@ -1173,7 +1173,8 @@ with tab_cos:
                     height=420, margin=dict(l=20,r=20,t=10,b=40)
                 )
                 st.plotly_chart(fig_psi, use_container_width=True)
-            # ── Autopower: kontribusi variansi per region ─────
+
+            # ── Autopower: kontribusi variansi per region ────────────────
             st.markdown(f'<p class="sec-hdr">{t("Analisis kontribusi variansi & justifikasi window","Variance contribution analysis & window justification")}</p>',
                         unsafe_allow_html=True)
 
@@ -1196,18 +1197,18 @@ with tab_cos:
                      "min": None, "max": None},
                 ]
 
-                    def region_stats(rdef, wn_arr, auto_arr, total_v, auto_mx):
-                        wn_arr = np.array(wn_arr)
-                        auto_arr = np.array(auto_arr)
-                        if rdef["min"] is None:
-                            mask = ((wn_arr > 1800) & (wn_arr < 2800)) | (wn_arr > 3700)
-                        else:
-                            mask = (wn_arr >= rdef["min"]) & (wn_arr <= rdef["max"])
-                        ap_region  = auto_arr[mask]
-                        var_pct    = float(ap_region.sum() / total_v * 100) if total_v > 0 else 0.0
-                        rel_max    = float(ap_region.max() / auto_mx * 100) if len(ap_region) > 0 and auto_mx > 0 else 0.0
-                        n_active   = int((ap_region / auto_mx * 100 >= 10).sum())
-                        return var_pct, rel_max, n_active
+                def region_stats(rdef, wn_arr, auto_arr, total_v, auto_mx):
+                    wn_arr   = np.array(wn_arr)
+                    auto_arr = np.array(auto_arr)
+                    if rdef["min"] is None:
+                        mask = ((wn_arr > 1800) & (wn_arr < 2800)) | (wn_arr > 3700)
+                    else:
+                        mask = (wn_arr >= rdef["min"]) & (wn_arr <= rdef["max"])
+                    ap_region = auto_arr[mask]
+                    var_pct   = float(ap_region.sum() / total_v * 100) if total_v > 0 else 0.0
+                    rel_max   = float(ap_region.max() / auto_mx * 100) if len(ap_region) > 0 and auto_mx > 0 else 0.0
+                    n_active  = int((ap_region / auto_mx * 100 >= 10).sum())
+                    return var_pct, rel_max, n_active
 
                 rows_var = []
                 for rd in regions_def:
@@ -1231,8 +1232,8 @@ with tab_cos:
                 st.dataframe(df_var, use_container_width=True, hide_index=True)
 
                 # Justifikasi otomatis untuk window terbaik
-                best = max(rows_var,
-                           key=lambda x: x[t("Kontribusi variansi (%)","Variance contribution (%)")])
+                best     = max(rows_var,
+                               key=lambda x: x[t("Kontribusi variansi (%)","Variance contribution (%)")])
                 best_var  = best[t("Kontribusi variansi (%)","Variance contribution (%)")]
                 best_rel  = best["Auto_rel maks (%)"]
                 best_name = best[t("Region","Region")]
@@ -1283,15 +1284,21 @@ with tab_cos:
                 """, unsafe_allow_html=True)
 
                 # Download justifikasi sebagai TXT
-                plain_id = justification_id.replace("<b>","").replace("</b>","").replace("&lt;","<")
-                plain_en = justification_en.replace("<b>","").replace("</b>","").replace("&lt;","<")
-                dl_text = f"=== Justifikasi Window (ID) ===\n{plain_id}\n\n=== Window Justification (EN) ===\n{plain_en}"
+                plain_id = (justification_id
+                            .replace("<b>","").replace("</b>","").replace("&lt;","<"))
+                plain_en = (justification_en
+                            .replace("<b>","").replace("</b>","").replace("&lt;","<"))
+                dl_text = (
+                    f"=== Justifikasi Window (ID) ===\n{plain_id}\n\n"
+                    f"=== Window Justification (EN) ===\n{plain_en}"
+                )
                 st.download_button(
                     t("⬇ Download justifikasi (TXT)","⬇ Download justification (TXT)"),
                     dl_text,
                     f"window_justification_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
                     "text/plain"
                 )
+
             st.markdown(f'<p class="sec-hdr">{t("Analisis cross-peak & Noda\'s Rules","Cross-peak analysis & Noda\'s Rules")}</p>',
                         unsafe_allow_html=True)
             cp_cols = st.columns(2)
