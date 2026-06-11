@@ -13,6 +13,7 @@ from database import (init_db, add_spectrum, delete_spectrum,
                       get_spectrum_by_id, get_all_spectra_for_matching,
                       count_spectra, get_categories, import_from_json)
 from mcr_engine import (preprocess, detect_components, run_mcr_als,
+                        run_mcr_multi_k, generate_warnings, compute_scorecard,
                         postprocess_mcr_spectra,
                         batch_match, consensus_label, interpolate_spectrum,
                         apply_window)
@@ -313,7 +314,7 @@ with tab_mcr:
         st.markdown(f'<p class="sec-hdr">{t("Deteksi komponen (PCA)","Component detection (PCA)")}</p>',
                     unsafe_allow_html=True)
 
-        ev, cum, auto_k = detect_components(D)
+        ev, cum, auto_k, sens_k, ind_vals, ev_abs = detect_components(D)
         fig_pca = make_subplots(rows=1, cols=2,
             subplot_titles=(
                 t("Variansi tiap komponen (%)","Variance per component (%)"),
@@ -331,8 +332,8 @@ with tab_mcr:
         fig_pca.update_xaxes(gridcolor="#1e293b")
         fig_pca.update_yaxes(gridcolor="#1e293b")
         st.plotly_chart(fig_pca, use_container_width=True)
-        st.caption(t(f"Saran otomatis PCA: **{auto_k} komponen** (≥95% variansi)",
-                     f"PCA suggestion: **{auto_k} components** (≥95% variance)"))
+        st.caption(t(f"Saran otomatis PCA: **{auto_k} komponen** (≥95% variansi) | Sensitivity: **{sens_k} komponen**",
+                     f"PCA suggestion: **{auto_k} components** (≥95% variance) | Sensitivity: **{sens_k} components**"))
 
         st.markdown(f'<p class="sec-hdr">{t("Parameter MCR-ALS","MCR-ALS parameters")}</p>',
                     unsafe_allow_html=True)
@@ -344,16 +345,31 @@ with tab_mcr:
                        format_func=lambda x: f"{x:.0e}")
         closure  = a4.checkbox(t("Closure constraint","Closure constraint"), value=False)
 
+        b1, b2, b3 = st.columns(3)
+        unimodal    = b1.checkbox(t("Unimodality constraint","Unimodality constraint"), value=False,
+                        help=t("Paksa spektra murni memiliki satu puncak saja",
+                               "Force pure spectra to have a single peak"))
+        sensitivity = b2.slider(t("Sensitivity komponen minor","Minor component sensitivity"),
+                        10, 190, 100, step=10,
+                        help=t("Tinggi = lebih banyak komponen terdeteksi (termasuk minor). Rendah = hanya komponen dominan.",
+                               "High = more components detected (including minor). Low = dominant components only."))
+        _, sens_k, _, _, _ = detect_components(D, sensitivity=sensitivity)[2:]
+        b3.info(t(f"Sensitivity → **{sens_k} komponen**", f"Sensitivity → **{sens_k} components**"))
+
         if st.button(f"▶  {t('Jalankan MCR-ALS','Run MCR-ALS')}",
                      use_container_width=True):
             with st.spinner(t("Menjalankan MCR-ALS...","Running MCR-ALS...")):
-                C, S, lof_hist, r2, conv = run_mcr_als(
-                    D, int(n_comp), int(max_iter), float(tol), closure
+                C, S, lof_hist, r2, conv, diag = run_mcr_als(
+                    D, int(n_comp), int(max_iter), float(tol),
+                    closure, unimodal, normalize_S=True
                 )
+                warnings_list = generate_warnings(diag, int(n_comp), ev)
                 st.session_state.update({
                     "mcr_C": C, "mcr_S": S, "mcr_lof": lof_hist,
                     "mcr_r2": r2, "mcr_ncomp": int(n_comp),
-                    "mcr_converged": conv
+                    "mcr_converged": conv,
+                    "mcr_diag": diag,
+                    "mcr_warnings": warnings_list,
                 })
                 # Reset post-MCR processing on new MCR run
                 for _key in ["mcr_S_proc","mcr_proc_log","match_results",
@@ -361,7 +377,19 @@ with tab_mcr:
                     st.session_state.pop(_key, None)
             conv_msg = t("Konvergen","Converged") if conv else t("Belum konvergen","Not converged")
             st.success(f"✅ {conv_msg} — {len(lof_hist)} {t('iterasi','iterations')} "
-                       f"| LOF: {lof_hist[-1]:.4f}% | R²: {r2:.5f}")
+                       f"| LOF: {lof_hist[-1]:.4f}% | R²: {r2:.5f} "
+                       f"| RMSE: {diag['rmse']:.5f}")
+            # Tampilkan warning system
+            for w in warnings_list:
+                sev = w["severity"]
+                msg = w["message_en"] if lang == "en" else w["message_id"]
+                if sev == "error":
+                    st.error(f"[Tipe {w['type']}] {msg}")
+                elif sev == "warning":
+                    st.warning(f"[Tipe {w['type']}] {msg}")
+                else:
+                    if w["code"] != "OK":
+                        st.info(f"[Tipe {w['type']}] {msg}")
 
         if "mcr_S" in st.session_state:
             S_res = st.session_state["mcr_S"]
@@ -382,12 +410,62 @@ with tab_mcr:
                     unsafe_allow_html=True
                 )
 
-            if lof_h[-1] > 10:
-                st.warning(t("⚠️ LOF > 10% — coba tambah jumlah komponen atau perbaiki preprocessing.",
-                             "⚠️ LOF > 10% — try increasing components or improve preprocessing."))
-            elif lof_h[-1] > 5:
-                st.info(t("ℹ️ LOF 5–10% — hasil dapat diterima, pertimbangkan komponen lebih.",
-                          "ℹ️ LOF 5–10% — acceptable, consider more components."))
+            # ── Validation Scorecard ──────────────────────────
+            if "mcr_diag" in st.session_state:
+                diag_stored = st.session_state["mcr_diag"]
+                scorecard, total_sc, overall = compute_scorecard(diag_stored)
+                sc_color = {"baik":"#0d2018","sedang":"#1a1a08","perlu_perbaikan":"#1a0a08"}[overall]
+                sc_border = {"baik":"#22c55e","sedang":"#eab308","perlu_perbaikan":"#ef4444"}[overall]
+                sc_text   = {"baik":"#4ade80","sedang":"#fde047","perlu_perbaikan":"#f87171"}[overall]
+                sc_label  = {"baik": t("BAIK","GOOD"),
+                             "sedang": t("SEDANG","MODERATE"),
+                             "perlu_perbaikan": t("PERLU PERBAIKAN","NEEDS IMPROVEMENT")}[overall]
+
+                with st.expander(
+                    t(f"📋 Validation Scorecard — {total_sc}/8 kriteria terpenuhi ({sc_label})",
+                      f"📋 Validation Scorecard — {total_sc}/8 criteria met ({sc_label})"),
+                    expanded=(overall != "baik")
+                ):
+                    for sc in scorecard:
+                        msg = sc["message_en"] if lang == "en" else sc["message_id"]
+                        st.markdown(
+                            f'<div style="display:flex;gap:12px;padding:5px 0;'
+                            f'border-bottom:0.5px solid #1e293b;font-size:0.83rem;">'
+                            f'<span style="width:24px;text-align:center;">{sc["status"]}</span>'
+                            f'<span style="width:220px;color:#94a3b8;">{sc["criterion"]}</span>'
+                            f'<span style="width:100px;font-family:monospace;color:#7dd3fc;">{sc["value"]}</span>'
+                            f'<span style="color:#e2e8f0;">{msg}</span>'
+                            f'</div>',
+                            unsafe_allow_html=True
+                        )
+
+                    # Residual per sampel
+                    st.markdown(f'<p class="sec-hdr" style="margin-top:1rem;">'
+                                f'{t("Residual per sampel","Residual per sample")}</p>',
+                                unsafe_allow_html=True)
+                    lof_ps = diag_stored["lof_per_sample"]
+                    snames_sc = st.session_state.get("spec_names",
+                                [f"S{i+1}" for i in range(len(lof_ps))])
+                    if len(snames_sc) != len(lof_ps):
+                        snames_sc = [f"S{i+1}" for i in range(len(lof_ps))]
+                    fig_sr = go.Figure(go.Bar(
+                        x=snames_sc, y=lof_ps,
+                        marker_color=["#ef4444" if v > 3*np.mean(lof_ps) else "#378ADD"
+                                      for v in lof_ps]
+                    ))
+                    mean_lof_s = float(np.mean(lof_ps))
+                    fig_sr.add_hline(y=mean_lof_s*3, line_dash="dash",
+                                     line_color="#f97316",
+                                     annotation_text=t("3× rata-rata","3× mean"))
+                    fig_sr.update_layout(
+                        template="plotly_dark", paper_bgcolor="#0f1117",
+                        plot_bgcolor="#0f1117", height=200,
+                        xaxis=dict(gridcolor="#1e293b"),
+                        yaxis=dict(gridcolor="#1e293b",
+                                   title=t("LOF per sampel (%)","LOF per sample (%)")),
+                        margin=dict(l=20,r=20,t=10,b=40)
+                    )
+                    st.plotly_chart(fig_sr, use_container_width=True)
 
             colors = px.colors.qualitative.Pastel
 
