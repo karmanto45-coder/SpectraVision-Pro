@@ -1173,7 +1173,125 @@ with tab_cos:
                     height=420, margin=dict(l=20,r=20,t=10,b=40)
                 )
                 st.plotly_chart(fig_psi, use_container_width=True)
+            # ── Autopower: kontribusi variansi per region ─────
+            st.markdown(f'<p class="sec-hdr">{t("Analisis kontribusi variansi & justifikasi window","Variance contribution analysis & window justification")}</p>',
+                        unsafe_allow_html=True)
 
+            total_var = float(Auto.sum())
+            auto_max  = float(Auto.max())
+
+            if total_var > 0 and auto_max > 0:
+                regions_def = [
+                    {"name": t("Fingerprint","Fingerprint"),
+                     "range": "400–1800 cm⁻¹",
+                     "min": 400, "max": 1800},
+                    {"name": t("C–H stretch","C–H stretch"),
+                     "range": "2800–3100 cm⁻¹",
+                     "min": 2800, "max": 3100},
+                    {"name": t("O–H stretch","O–H stretch"),
+                     "range": "3100–3700 cm⁻¹",
+                     "min": 3100, "max": 3700},
+                    {"name": t("Sisa / Other","Other"),
+                     "range": "1800–2800 + 3700–4000 cm⁻¹",
+                     "min": None, "max": None},
+                ]
+
+                    def region_stats(rdef, wn_arr, auto_arr, total_v, auto_mx):
+                        wn_arr = np.array(wn_arr)
+                        auto_arr = np.array(auto_arr)
+                        if rdef["min"] is None:
+                            mask = ((wn_arr > 1800) & (wn_arr < 2800)) | (wn_arr > 3700)
+                        else:
+                            mask = (wn_arr >= rdef["min"]) & (wn_arr <= rdef["max"])
+                        ap_region  = auto_arr[mask]
+                        var_pct    = float(ap_region.sum() / total_v * 100) if total_v > 0 else 0.0
+                        rel_max    = float(ap_region.max() / auto_mx * 100) if len(ap_region) > 0 and auto_mx > 0 else 0.0
+                        n_active   = int((ap_region / auto_mx * 100 >= 10).sum())
+                        return var_pct, rel_max, n_active
+
+                rows_var = []
+                for rd in regions_def:
+                    vp, rm, na = region_stats(rd, wn_r, Auto, total_var, auto_max)
+                    if vp >= 15 and rm >= 50:
+                        badge = "✅"; rec = t("Window utama MCR","Primary MCR window")
+                    elif vp >= 5:
+                        badge = "🟡"; rec = t("Window tambahan","Secondary window")
+                    else:
+                        badge = "❌"; rec = t("Tidak direkomendasikan","Not recommended")
+                    rows_var.append({
+                        t("Region","Region"):          rd["name"],
+                        t("Range","Range"):            rd["range"],
+                        "Auto_rel maks (%)":           round(rm, 1),
+                        t("Kontribusi variansi (%)","Variance contribution (%)"):
+                                                       round(vp, 1),
+                        t("Rekomendasi","Recommendation"): f"{badge} {rec}",
+                    })
+
+                df_var = pd.DataFrame(rows_var)
+                st.dataframe(df_var, use_container_width=True, hide_index=True)
+
+                # Justifikasi otomatis untuk window terbaik
+                best = max(rows_var,
+                           key=lambda x: x[t("Kontribusi variansi (%)","Variance contribution (%)")])
+                best_var  = best[t("Kontribusi variansi (%)","Variance contribution (%)")]
+                best_rel  = best["Auto_rel maks (%)"]
+                best_name = best[t("Region","Region")]
+                best_rng  = best[t("Range","Range")]
+                other_var = round(100 - best_var, 1)
+
+                if best_var >= 80:
+                    box_color = "#0d2018"; border_color = "#22c55e"; text_color = "#4ade80"
+                    strength  = t("sangat kuat (≥80%)","very strong (≥80%)")
+                elif best_var >= 60:
+                    box_color = "#1a1a08"; border_color = "#eab308"; text_color = "#fde047"
+                    strength  = t("cukup kuat (60–80%)","moderate (60–80%)")
+                else:
+                    box_color = "#1a0a08"; border_color = "#ef4444"; text_color = "#f87171"
+                    strength  = t("lemah (<60%)","weak (<60%)")
+
+                justification_id = (
+                    f"Pemilihan window analisis <b>{best_rng}</b> ({best_name} region) "
+                    f"didasarkan pada distribusi autopower spectrum hasil 2D-COS yang menunjukkan "
+                    f"<b>{best_var}%</b> total variansi spektral terkonsentrasi di region ini, "
+                    f"dengan autopower relatif maksimum <b>{best_rel}%</b> terhadap keseluruhan spektrum. "
+                    f"Band di luar region ini menunjukkan kontribusi variansi kumulatif yang tidak signifikan "
+                    f"(&lt;{other_var}%), sehingga tidak memberikan informasi diskriminatif tambahan "
+                    f"untuk resolusi MCR-ALS."
+                )
+                justification_en = (
+                    f"The analytical window <b>{best_rng}</b> ({best_name} region) was selected "
+                    f"based on the 2D-COS autopower spectrum distribution, which revealed that "
+                    f"<b>{best_var}%</b> of total spectral variance is concentrated in this region, "
+                    f"with a maximum relative autopower of <b>{best_rel}%</b>. "
+                    f"Bands outside this region contribute &lt;{other_var}% of cumulative variance "
+                    f"and thus provide insufficient discriminative information for MCR-ALS resolution."
+                )
+                justification_text = justification_en if lang == "en" else justification_id
+
+                st.markdown(f"""
+                <div style="background:{box_color};border:1px solid {border_color};
+                  border-radius:10px;padding:1rem 1.2rem;margin-top:0.8rem;">
+                  <div style="font-size:0.72rem;color:{text_color};font-family:'DM Mono',monospace;
+                    text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.5rem;">
+                    {t("Justifikasi window otomatis","Auto window justification")}
+                    &nbsp;·&nbsp; {t("Kekuatan:","Strength:")} {strength}
+                  </div>
+                  <div style="font-size:0.85rem;color:#e2e8f0;line-height:1.7;">
+                    {justification_text}
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # Download justifikasi sebagai TXT
+                plain_id = justification_id.replace("<b>","").replace("</b>","").replace("&lt;","<")
+                plain_en = justification_en.replace("<b>","").replace("</b>","").replace("&lt;","<")
+                dl_text = f"=== Justifikasi Window (ID) ===\n{plain_id}\n\n=== Window Justification (EN) ===\n{plain_en}"
+                st.download_button(
+                    t("⬇ Download justifikasi (TXT)","⬇ Download justification (TXT)"),
+                    dl_text,
+                    f"window_justification_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                    "text/plain"
+                )
             st.markdown(f'<p class="sec-hdr">{t("Analisis cross-peak & Noda\'s Rules","Cross-peak analysis & Noda\'s Rules")}</p>',
                         unsafe_allow_html=True)
             cp_cols = st.columns(2)
