@@ -575,13 +575,17 @@ with tab_mcr:
             )
         )
 
-from mcr_replicate_extension import average_replicate_spectra, assess_group_separability
+        from mcr_replicate_extension import average_replicate_spectra, assess_group_separability
 
-use_multi_replicate = st.checkbox(
-    "Gabungkan beberapa entri sebagai satu referensi (rata-rata replikat)",
-    value=False, key="mcr_use_replicate_avg"
-)
-# Kalau tidak dicentang → perilaku 100% sama seperti sebelumnya (default OFF)
+        use_multi_replicate = st.checkbox(
+            "Gabungkan beberapa entri sebagai satu referensi (rata-rata replikat)",
+            value=False, key="mcr_use_replicate_avg"
+        )
+        # Kalau tidak dicentang -> perilaku 100% sama seperti sebelumnya (default OFF)
+
+        S_init_guess = None
+        if use_init_guess:
+            ...
 
       S_init_guess = None
         if use_init_guess:
