@@ -575,7 +575,15 @@ with tab_mcr:
             )
         )
 
-        S_init_guess = None
+from mcr_replicate_extension import average_replicate_spectra, assess_group_separability
+
+use_multi_replicate = st.checkbox(
+    "Gabungkan beberapa entri sebagai satu referensi (rata-rata replikat)",
+    value=False, key="mcr_use_replicate_avg"
+)
+# Kalau tidak dicentang → perilaku 100% sama seperti sebelumnya (default OFF)
+
+      S_init_guess = None
         if use_init_guess:
             from database import get_all_spectra_for_matching, get_spectrum_by_id
             all_lib = get_all_spectra_for_matching()
