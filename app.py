@@ -585,10 +585,6 @@ with tab_mcr:
 
         S_init_guess = None
         if use_init_guess:
-            ...
-
-      S_init_guess = None
-        if use_init_guess:
             from database import get_all_spectra_for_matching, get_spectrum_by_id
             all_lib = get_all_spectra_for_matching()
             if not all_lib:
