@@ -582,7 +582,55 @@ with tab_mcr:
             value=False, key="mcr_use_replicate_avg"
         )
         # Kalau tidak dicentang -> perilaku 100% sama seperti sebelumnya (default OFF)
+        if use_multi_replicate:
+            from mcr_replicate_extension import assess_group_separability
 
+            spec_names_all = st.session_state.get("spec_names", [])
+            spectra_all = st.session_state["spectra"]  # shape: (n_wavenumber x n_sampel)
+
+            rcol1, rcol2 = st.columns(2)
+            group_a_names = rcol1.multiselect(
+                t("Pilih kolom Kelompok A (mis. semua replikat jahe merah)",
+                  "Select Group A columns (e.g. all red ginger replicates)"),
+                spec_names_all, key="mcr_group_a"
+            )
+            group_b_names = rcol2.multiselect(
+                t("Pilih kolom Kelompok B (mis. semua replikat jahe emprit)",
+                  "Select Group B columns (e.g. all white ginger replicates)"),
+                spec_names_all, key="mcr_group_b"
+            )
+
+            if len(group_a_names) >= 2 and len(group_b_names) >= 2:
+                idx_a = [spec_names_all.index(n) for n in group_a_names]
+                idx_b = [spec_names_all.index(n) for n in group_b_names]
+                group_a_spectra = [spectra_all[:, i] for i in idx_a]
+                group_b_spectra = [spectra_all[:, i] for i in idx_b]
+
+                result = assess_group_separability(
+                    group_a_spectra, group_b_spectra, wn,
+                    name_a="Kelompok A", name_b="Kelompok B"
+                )
+
+                st.markdown(result["overall_verdict"])
+
+                if result["strong_regions"]:
+                    st.markdown(t("**Region pembeda kuat ditemukan:**",
+                                  "**Strong distinguishing regions found:**"))
+                    for reg in result["strong_regions"][:8]:
+                        st.write(f"- {reg['wn_start']:.0f}–{reg['wn_end']:.0f} cm⁻¹ "
+                                 f"(puncak SNR di {reg['peak_wn']:.0f} cm⁻¹, "
+                                 f"SNR={reg['max_snr']:.2f})")
+                elif result["candidate_regions"]:
+                    st.markdown(t("**Region kandidat (belum kuat):**",
+                                  "**Candidate regions (not yet strong):**"))
+                    for reg in result["candidate_regions"][:8]:
+                        st.write(f"- {reg['wn_start']:.0f}–{reg['wn_end']:.0f} cm⁻¹ "
+                                 f"(SNR={reg['max_snr']:.2f})")
+            else:
+                st.info(t(
+                    "Pilih minimal 2 kolom di tiap kelompok untuk menjalankan analisis.",
+                    "Select at least 2 columns in each group to run the analysis."
+                ))
         S_init_guess = None
         if use_init_guess:
             from database import get_all_spectra_for_matching, get_spectrum_by_id
