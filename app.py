@@ -612,7 +612,14 @@ with tab_mcr:
                 )
 
                 st.markdown(result["overall_verdict"])
+                from mcr_replicate_extension import build_separability_figure
+                fig_sep = build_separability_figure(result, wn, "Kelompok A", "Kelompok B")
+                st.plotly_chart(fig_sep, use_container_width=True)
 
+                # Simpan untuk dipakai di fitur Laporan (tab Export data)
+                st.session_state["replicate_sep_result"] = result
+                st.session_state["replicate_sep_wn"] = wn
+                st.session_state["replicate_sep_names"] = ("Kelompok A", "Kelompok B")            
                 if result["strong_regions"]:
                     st.markdown(t("**Region pembeda kuat ditemukan:**",
                                   "**Strong distinguishing regions found:**"))
@@ -3135,4 +3142,39 @@ with tab_rep:
                 df_S_csv.to_csv(),
                 f"pure_spectra_{datetime.now().strftime('%Y%m%d')}.csv",
                 "text/csv", use_container_width=True
+            )
+        # ── Laporan tambahan: Analisis Keterpisahan Kelompok Replikat ──
+        # (independen dari hasil MCR di atas — bisa dipakai walau MCR
+        # belum pernah dijalankan, karena analisis replikat murni tidak
+        # butuh hasil MCR sama sekali)
+        if "replicate_sep_result" in st.session_state:
+            st.markdown(f'<p class="sec-hdr">{t("Laporan Analisis Keterpisahan Replikat","Replicate Separability Report")}</p>',
+                        unsafe_allow_html=True)
+
+            from mcr_replicate_extension import (
+                build_separability_dataframe, build_separability_regions_dataframe
+            )
+
+            rep_result = st.session_state["replicate_sep_result"]
+            rep_wn     = st.session_state["replicate_sep_wn"]
+            rep_name_a, rep_name_b = st.session_state["replicate_sep_names"]
+
+            df_sep_data    = build_separability_dataframe(rep_result, rep_wn, rep_name_a, rep_name_b)
+            df_sep_regions = build_separability_regions_dataframe(rep_result)
+
+            output_sep = io.BytesIO()
+            with pd.ExcelWriter(output_sep, engine="openpyxl") as writer_sep:
+                df_sep_regions.to_excel(writer_sep, sheet_name="Ringkasan Region", index=False)
+                df_sep_data.to_excel(writer_sep, sheet_name="Data Perhitungan Lengkap", index=False)
+            output_sep.seek(0)
+
+            st.dataframe(df_sep_regions, use_container_width=True)
+
+            st.download_button(
+                t("⬇ Download laporan keterpisahan replikat (Excel)",
+                  "⬇ Download replicate separability report (Excel)"),
+                data=output_sep,
+                file_name=f"Separability_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
             )
