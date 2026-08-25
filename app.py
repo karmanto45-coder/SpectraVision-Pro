@@ -24,6 +24,7 @@ from mcr_engine import (preprocess, detect_components, run_mcr_als,
                         apply_derivative, validate_derivative_params,
                         batch_match_derivative, peak_position_match,
                         compare_two_spectra)
+from ambiguity_engine import compute_rotational_ambiguity, K_EXACT_LIMIT
 from cos2d import (compute_2dcos, find_crosspeaks, apply_nodas_rules,
                    PERTURBATION_PRESETS)
 
@@ -1014,6 +1015,126 @@ with tab_mcr:
                         margin=dict(l=20,r=20,t=10,b=40)
                     )
                     st.plotly_chart(fig_sr, use_container_width=True)
+
+                # ── Ambiguitas Rotasi (MCR-BANDS) ──────────────────────────
+                with st.expander(
+                    t("📐 Ambiguitas Rotasi (MCR-BANDS)", "📐 Rotational Ambiguity (MCR-BANDS)"),
+                    expanded=False
+                ):
+                    st.caption(t(
+                        "Mengukur seberapa lebar rentang solusi C/S alternatif yang "
+                        "masih memenuhi constraint yang sama (non-negativity, closure) "
+                        "tanpa mengubah kecocokan terhadap data. Lebar besar = hasil "
+                        "kurang unik, perlu constraint tambahan atau data selektif.",
+                        "Measures how wide the range of alternative C/S solutions is "
+                        "that still satisfy the same constraints (non-negativity, "
+                        "closure) without changing the fit to data. Large width = "
+                        "less unique result, needs more constraints or selective data."
+                    ))
+
+                    method_note = (
+                        t(f"Metode EKSAK akan dipakai (≤{K_EXACT_LIMIT} komponen).",
+                          f"EXACT method will be used (≤{K_EXACT_LIMIT} components).")
+                        if nc <= K_EXACT_LIMIT else
+                        t(f"Metode ESTIMASI (heuristik) akan dipakai (>{K_EXACT_LIMIT} komponen) "
+                          f"— hasil berupa perkiraan, bukan batas eksak.",
+                          f"HEURISTIC (estimated) method will be used (>{K_EXACT_LIMIT} components) "
+                          f"— result is an approximation, not an exact bound.")
+                    )
+                    st.info(method_note)
+
+                    n_dir = 20
+                    if nc > K_EXACT_LIMIT:
+                        n_dir = st.slider(
+                            t("Jumlah arah eksplorasi (lebih besar = lebih teliti, lebih lambat)",
+                              "Number of exploration directions (higher = more thorough, slower)"),
+                            min_value=10, max_value=60, value=20, step=5,
+                        )
+
+                    if st.button(t("🔍 Hitung Ambiguitas", "🔍 Compute Ambiguity"), key="btn_ambiguity"):
+                        constraints_used = diag_stored.get("constraints_used", {})
+                        with st.spinner(t("Menghitung rentang ambiguitas...", "Computing ambiguity range...")):
+                            try:
+                                amb_result = compute_rotational_ambiguity(
+                                    C_res, S_res, constraints_used,
+                                    method="auto", n_directions=n_dir,
+                                )
+                                st.session_state["mcr_ambiguity"] = amb_result
+                            except Exception as e:
+                                st.error(t(f"Gagal menghitung ambiguitas: {e}",
+                                           f"Failed to compute ambiguity: {e}"))
+
+                    if "mcr_ambiguity" in st.session_state:
+                        amb = st.session_state["mcr_ambiguity"]
+
+                        badge = (t("✅ Eksak (SLSQP)", "✅ Exact (SLSQP)")
+                                 if amb["method_used"] == "exact"
+                                 else t("⚠️ Estimasi (heuristik)", "⚠️ Estimated (heuristic)"))
+                        st.markdown(f"**{badge}**")
+
+                        if amb["method_used"] == "heuristic":
+                            nv = amb["diagnostics"]["n_valid_samples"]
+                            nt = amb["diagnostics"]["n_total_samples"]
+                            st.caption(t(
+                                f"{nv}/{nt} arah eksplorasi berhasil menemukan solusi feasible. "
+                                f"Rentang di bawah kemungkinan UNDER-ESTIMATE lebar ambiguitas sebenarnya.",
+                                f"{nv}/{nt} exploration directions found a feasible solution. "
+                                f"The ranges below may UNDER-ESTIMATE the true ambiguity width."
+                            ))
+                            if nv == 0:
+                                st.warning(t(
+                                    "Tidak ada solusi feasible ditemukan — coba naikkan jumlah arah "
+                                    "eksplorasi, atau hasil MCR-ALS mungkin terlalu dekat batas constraint.",
+                                    "No feasible solution found — try increasing the number of "
+                                    "exploration directions, or the MCR-ALS result may be too "
+                                    "close to the constraint boundary."
+                                ))
+
+                        # Tabel ringkasan lebar ambiguitas per komponen
+                        rows = []
+                        for comp in amb["components"]:
+                            rows.append({
+                                t("Komponen", "Component"): f"C{comp['component_idx']+1}",
+                                t("Lebar Ambiguitas (%)", "Ambiguity Width (%)"): round(comp["ambiguity_width_pct"], 2),
+                                t("Status Optimasi", "Optimizer Status"): (
+                                    "✅" if comp["optimizer_success"] else "⚠️"
+                                ),
+                            })
+                        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+                        # Grafik pita feasible per komponen (overlay pada profil nominal)
+                        wn_axis = wn  # variabel 'wn' sudah tersedia di scope tab_mcr (baris 397 app.py)
+                        comp_to_plot = st.selectbox(
+                            t("Pilih komponen untuk visualisasi pita", "Select component to visualize band"),
+                            options=list(range(nc)),
+                            format_func=lambda i: f"C{i+1}",
+                            key="ambig_comp_select",
+                        )
+                        comp_data = amb["components"][comp_to_plot]
+
+                        fig_amb = go.Figure()
+                        fig_amb.add_trace(go.Scatter(
+                            x=wn_axis, y=comp_data["S_band_max"], mode="lines",
+                            line=dict(width=0), showlegend=False, hoverinfo="skip",
+                        ))
+                        fig_amb.add_trace(go.Scatter(
+                            x=wn_axis, y=comp_data["S_band_min"], mode="lines",
+                            line=dict(width=0), fill="tonexty", fillcolor="rgba(125,211,252,0.25)",
+                            name=t("Pita feasible", "Feasible band"),
+                        ))
+                        fig_amb.add_trace(go.Scatter(
+                            x=wn_axis, y=S_res[comp_to_plot], mode="lines",
+                            line=dict(color="#7dd3fc", width=2),
+                            name=t("Profil terpilih (nominal)", "Selected profile (nominal)"),
+                        ))
+                        fig_amb.update_layout(
+                            title=t(f"Pita Ambiguitas Spektrum — Komponen C{comp_to_plot+1}",
+                                    f"Spectral Ambiguity Band — Component C{comp_to_plot+1}"),
+                            xaxis_title=t("Bilangan gelombang (cm⁻¹)", "Wavenumber (cm⁻¹)"),
+                            yaxis_title=t("Absorbansi (ternormalisasi)", "Absorbance (normalized)"),
+                            height=380,
+                        )
+                        st.plotly_chart(fig_amb, use_container_width=True)
 
             colors = px.colors.qualitative.Pastel
 
