@@ -25,8 +25,23 @@ nominal itu sendiri (lihat catatan di _normalize_rows).
 
 Referensi konsep: Tauler (1995) Chemom. Intell. Lab. Syst.; metode
 MCR-BANDS (Tauler & kawan-kawan) untuk estimasi rentang solusi feasible
-akibat ambiguitas rotasi.
+akibat ambiguitas rotasi. RMSERA mengikuti formalisme Chiappini, Alcaraz,
+et al., Anal. Chem. 2020, 92(10), 7255-7263 (δRA/√12 untuk batas bawah,
+δRA/√3 untuk batas atas) — DIADAPTASI ke skala konsentrasi relatif MCR-ALS
+(bukan satuan absolut hasil kalibrasi second-order eksternal), karena
+tidak ada nilai referensi/kalibrasi silang pada alur kerja SpectraVision
+Pro. δRA di sini didekati sebagai rata-rata sebaran konsentrasi per
+sampel (selisih area maks-min dibagi jumlah sampel), BUKAN dari satu
+sampel uji tunggal seperti pada definisi kalibrasi second-order asli —
+adaptasi ini WAJIB dinyatakan secara eksplisit di metodologi jika dipakai
+untuk publikasi.
 """
+
+# Ambang klasifikasi (dapat diubah pemanggil; nilai default adalah
+# kriteria INTERPRETATIF praktis, bukan standar baku tunggal)
+AMBIGUITY_LOW_THRESHOLD_PCT = 30.0     # < ini -> ambiguitas rendah
+AMBIGUITY_HIGH_THRESHOLD_PCT = 100.0   # > ini -> ambiguitas tinggi
+LOCAL_AMBIGUITY_THRESHOLD_PCT = 15.0   # ambang lebar pita LOKAL (per titik)
 
 import numpy as np
 from scipy.optimize import minimize
@@ -92,6 +107,98 @@ def _feasibility_check(C_norm, S_norm, s_nonneg, tol=1e-5):
     if s_nonneg:
         parts.append(S_norm.flatten())
     return float(np.concatenate(parts).min()) >= -tol
+
+
+# ---------------------------------------------------------------------------
+# Klasifikasi keandalan (kuantitatif / semi-kuantitatif / kualitatif)
+# ---------------------------------------------------------------------------
+
+def classify_reliability(ambiguity_width_pct, fit_ok=True,
+                          low_threshold=AMBIGUITY_LOW_THRESHOLD_PCT,
+                          high_threshold=AMBIGUITY_HIGH_THRESHOLD_PCT):
+    """
+    Menggabungkan status fit (dari scorecard yang SUDAH ADA di mcr_engine,
+    mis. overall scorecard 'baik'/tidak, ATAU LOF/R2 per komponen) dengan
+    lebar ambiguitas rotasi komponen ini, menjadi satu label keandalan.
+
+    fit_ok : bool — hasil fit dianggap baik (dari scorecard existing).
+             Kalau False, klasifikasi langsung "tidak dapat diandalkan"
+             terlepas dari ambiguitas, karena masalah fit lebih mendasar.
+
+    Returns
+    -------
+    dict {"label", "detail"}
+    """
+    if not fit_ok:
+        return {
+            "label": "tidak_dapat_diandalkan",
+            "detail": "Fit MCR-ALS tidak memenuhi kriteria scorecard — "
+                      "ambiguitas rotasi belum relevan dibahas sebelum "
+                      "masalah fit ini diatasi.",
+        }
+    if ambiguity_width_pct < low_threshold:
+        return {
+            "label": "kuantitatif_kualitatif",
+            "detail": f"Ambiguitas rendah (<{low_threshold:.0f}%) dan fit baik — "
+                      f"angka konsentrasi & identitas komponen dapat diklaim langsung.",
+        }
+    if ambiguity_width_pct <= high_threshold:
+        return {
+            "label": "semi_kuantitatif_kualitatif",
+            "detail": f"Ambiguitas sedang ({low_threshold:.0f}-{high_threshold:.0f}%) — "
+                      f"pola/tren relatif dapat dipercaya, tapi angka konsentrasi "
+                      f"absolut perlu dilaporkan dengan kehati-hatian (bukan angka tunggal presisi).",
+        }
+    return {
+        "label": "kualitatif_saja",
+        "detail": f"Ambiguitas tinggi (>{high_threshold:.0f}%) — hanya klaim "
+                  f"identifikasi/keberadaan komponen yang disarankan; hindari "
+                  f"klaim angka konsentrasi untuk komponen ini.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Profil ambiguitas LOKAL (per titik bilangan gelombang)
+# ---------------------------------------------------------------------------
+
+def compute_local_ambiguity_profile(S_nominal_row, S_band_min_row, S_band_max_row,
+                                     local_threshold_pct=LOCAL_AMBIGUITY_THRESHOLD_PCT):
+    """
+    Menghitung lebar pita AMBIGUITAS LOKAL di tiap titik bilangan gelombang,
+    dinormalisasi terhadap intensitas MAKSIMUM spektrum komponen ini (bukan
+    per-titik) — supaya titik baseline yang nyaris nol tidak menghasilkan
+    persentase yang meledak/tidak bermakna.
+
+    KETERBATASAN PENTING: S_band_min/max di sini (untuk metode EKSAK)
+    berasal dari HANYA 2 solusi anchor (area-maks dan area-min), diambil
+    elementwise min/max keduanya — BUKAN hasil optimasi maks/min di SETIAP
+    titik bilangan gelombang secara individual. Profil ini kemungkinan
+    UNDER-ESTIMATE ambiguitas lokal sesungguhnya, karena titik ekstrem
+    sejati di suatu panjang gelombang tertentu bisa saja dicapai oleh T
+    lain yang tidak termasuk di antara 2 solusi anchor tersebut. Untuk
+    metode heuristik (k>K_EXACT_LIMIT), profil ini relatif lebih
+    representatif karena diambil dari envelope banyak solusi (n_directions),
+    tapi tetap bukan pencarian eksak per titik.
+
+    Returns
+    -------
+    dict {
+      "local_width_pct": array (n_lambda,) — lebar pita lokal (%)
+      "pct_region_low_ambiguity": float — % titik dengan lebar <= threshold
+      "low_ambiguity_mask": array bool (n_lambda,) — titik mana yang "aman"
+    }
+    """
+    scale = np.max(np.abs(S_nominal_row))
+    if scale < 1e-12:
+        scale = 1.0
+    local_width_pct = 100.0 * (S_band_max_row - S_band_min_row) / scale
+    low_mask = local_width_pct <= local_threshold_pct
+    pct_low = 100.0 * float(np.mean(low_mask))
+    return {
+        "local_width_pct": local_width_pct,
+        "pct_region_low_ambiguity": pct_low,
+        "low_ambiguity_mask": low_mask,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -271,47 +378,53 @@ def _sample_ambiguity_heuristic(C, S, s_nonneg, closure, n_directions=20,
 
 def compute_rotational_ambiguity(C, S, constraints_used, method="auto",
                                   n_directions=20, k_exact_limit=K_EXACT_LIMIT,
-                                  seed=None):
+                                  seed=None, fit_ok_per_component=None,
+                                  local_ambiguity_threshold_pct=LOCAL_AMBIGUITY_THRESHOLD_PCT,
+                                  reliability_low_threshold=AMBIGUITY_LOW_THRESHOLD_PCT,
+                                  reliability_high_threshold=AMBIGUITY_HIGH_THRESHOLD_PCT):
     """
-    Hitung ambiguitas rotasi (pendekatan MCR-BANDS) untuk hasil MCR-ALS.
+    Hitung ambiguitas rotasi (pendekatan MCR-BANDS) untuk hasil MCR-ALS,
+    dilengkapi RMSERA (adaptasi relatif), klasifikasi keandalan
+    (kuantitatif/semi-kuantitatif/kualitatif), dan profil ambiguitas lokal
+    per titik bilangan gelombang.
 
-    Parameters
-    ----------
-    C : (n_sampel x k)  -- profil konsentrasi hasil MCR-ALS (mcr_C)
-    S : (k x n_lambda)  -- profil spektra hasil MCR-ALS (mcr_S)
-    constraints_used : dict dari diagnostics["constraints_used"] (hasil
-                       run_mcr_als) — dipakai supaya pencarian ambiguitas
-                       menghormati closure & s_nonneg yang SAMA dengan run
-                       MCR-ALS aslinya, bukan menebak ulang dari nol.
-    method : 'auto' | 'exact' | 'heuristic'
-             'auto' -> exact jika k <= k_exact_limit, else heuristic
-    n_directions : jumlah arah yang dijelajahi untuk metode heuristik
-                   (tidak dipakai untuk metode exact). Lebih besar = lebih
-                   teliti tapi lebih lambat.
+    Parameters tambahan
+    --------------------
+    fit_ok_per_component : list[bool] atau None
+        Status fit per komponen dari scorecard yang SUDAH ADA di
+        mcr_engine.py (mis. berdasarkan LOF/R2 threshold). Jika None,
+        diasumsikan True untuk semua komponen (fit dianggap baik).
+    local_ambiguity_threshold_pct, reliability_low_threshold,
+    reliability_high_threshold : ambang yang bisa disesuaikan pemanggil;
+        default mengikuti konvensi interpretatif di kepala modul ini.
 
     Returns
     -------
     dict {
-      "method_used": "exact" | "heuristic",
-      "k": int,
+      "method_used", "k", "diagnostics",
       "components": [
          {
-           "component_idx", "area_nominal", "area_min", "area_max",
-           "ambiguity_width_pct",
-           "C_band_min", "C_band_max",   # untuk overlay plot profil C
-           "S_band_min", "S_band_max",   # untuk overlay plot profil S
-           "optimizer_success",
+           ... field lama (area_nominal, area_min, area_max,
+               ambiguity_width_pct, C_band_min/max, S_band_min/max,
+               optimizer_success),
+           "rmsera_lower", "rmsera_upper", "rmsera_upper_relative_pct",
+           "reliability": {"label", "detail"},
+           "local_ambiguity": {"local_width_pct", "pct_region_low_ambiguity",
+                                "low_ambiguity_mask"},
          }, ...
       ],
-      "diagnostics": {"n_valid_samples", "n_total_samples"}  # khusus heuristic
     }
     """
     C = np.asarray(C, dtype=float)
     S = np.asarray(S, dtype=float)
     k = C.shape[1]
+    n_samples = C.shape[0]
 
     if k < 2:
         raise ValueError("Ambiguitas rotasi hanya bermakna untuk k >= 2 komponen.")
+
+    if fit_ok_per_component is None:
+        fit_ok_per_component = [True] * k
 
     s_nonneg = bool(constraints_used.get("s_nonneg", True))
     closure = bool(constraints_used.get("closure", False))
@@ -329,13 +442,22 @@ def compute_rotational_ambiguity(C, S, constraints_used, method="auto",
             area_nom = _area(C_nom[:, i])
             width_pct = (100.0 * (res_max["area"] - res_min["area"]) / area_nom
                          if area_nom > 0 else 0.0)
+            # PENTING: profil dari solusi "area-maks" dan "area-min" bisa
+            # SALING SILANG di titik-titik tertentu (bukan satu selalu lebih
+            # tinggi dari yang lain di SELURUH rentang) — band envelope yang
+            # benar harus diambil elementwise min/max dari keduanya, bukan
+            # diasumsikan res_max selalu di atas res_min di semua titik.
+            C_lo = np.minimum(res_min["C_profile"], res_max["C_profile"])
+            C_hi = np.maximum(res_min["C_profile"], res_max["C_profile"])
+            S_lo = np.minimum(res_min["S_profile"], res_max["S_profile"])
+            S_hi = np.maximum(res_min["S_profile"], res_max["S_profile"])
             components.append({
                 "component_idx": i,
                 "area_nominal": area_nom,
                 "area_min": res_min["area"], "area_max": res_max["area"],
                 "ambiguity_width_pct": width_pct,
-                "C_band_min": res_min["C_profile"], "C_band_max": res_max["C_profile"],
-                "S_band_min": res_min["S_profile"], "S_band_max": res_max["S_profile"],
+                "C_band_min": C_lo, "C_band_max": C_hi,
+                "S_band_min": S_lo, "S_band_max": S_hi,
                 "optimizer_success": bool(res_min["success"] and res_max["success"]),
             })
         diag = {"n_valid_samples": None, "n_total_samples": None}
@@ -359,6 +481,35 @@ def compute_rotational_ambiguity(C, S, constraints_used, method="auto",
                 "optimizer_success": mc["n_valid"] > 0,
             })
         diag = {"n_valid_samples": mc["n_valid"], "n_total_samples": mc["n_total"]}
+
+    # ── Lengkapi tiap komponen dengan RMSERA, klasifikasi, & profil lokal ──
+    for comp in components:
+        i = comp["component_idx"]
+
+        # RMSERA (adaptasi relatif, lihat catatan di kepala modul)
+        delta_ra_avg = (comp["area_max"] - comp["area_min"]) / n_samples
+        rmsera_lower = delta_ra_avg / np.sqrt(12)
+        rmsera_upper = delta_ra_avg / np.sqrt(3)
+        mean_c_nominal = comp["area_nominal"] / n_samples
+        rmsera_upper_pct = (100.0 * rmsera_upper / mean_c_nominal
+                             if mean_c_nominal > 0 else 0.0)
+        comp["rmsera_lower"] = float(rmsera_lower)
+        comp["rmsera_upper"] = float(rmsera_upper)
+        comp["rmsera_upper_relative_pct"] = float(rmsera_upper_pct)
+
+        # Klasifikasi keandalan
+        comp["reliability"] = classify_reliability(
+            comp["ambiguity_width_pct"],
+            fit_ok=fit_ok_per_component[i] if i < len(fit_ok_per_component) else True,
+            low_threshold=reliability_low_threshold,
+            high_threshold=reliability_high_threshold,
+        )
+
+        # Profil ambiguitas lokal per titik bilangan gelombang
+        comp["local_ambiguity"] = compute_local_ambiguity_profile(
+            S_nom[i, :], comp["S_band_min"], comp["S_band_max"],
+            local_threshold_pct=local_ambiguity_threshold_pct,
+        )
 
     return {
         "method_used": method,
